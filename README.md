@@ -1,208 +1,144 @@
-# 🏥 HealthAI Pro+
+# HealthAI Pro+
 
-**HealthAI Pro+** is a full-stack AI-powered medical assistant built with a lightweight Java backend and a modern web interface. It provides instant, structured medical information about diseases, symptoms, and prevention using Google Gemini AI with a smart offline medical database fallback.
+HealthAI Pro+ is an educational full-stack health-information assistant with a lightweight Java HTTP backend and browser frontend. It combines a local knowledge fallback with Google Gemini API integration and an in-memory cache.
 
-⚠️ This project is for educational purposes only and is not a substitute for professional medical advice.
+> **Medical disclaimer:** This project is educational software, not a medical device or substitute for professional medical care. Do not use it to diagnose, treat, or make urgent medical decisions.
 
----
+## Architecture
 
-## 🚀 Features
-
-### Backend (Java)
-
-- Google Gemini AI integration for medical Q&A  
-- Offline disease knowledge base fallback  
-- Intelligent in-memory caching (6-hour TTL)  
-- Lightweight Java HTTP server (no Spring overhead)  
-- REST API endpoint: `/ask`  
-- Automatic CORS handling  
-- Production-style error handling and timeouts  
-
-### Frontend (HTML + JavaScript)
-
-- Professional medical-grade UI  
-- Login, Register, Forgot Password, Guest mode  
-- Persistent chat history (LocalStorage)  
-- Voice input using Web Speech API  
-- Dark / Light theme toggle  
-- Chat export & clear history  
-- Typing animation and copy-to-clipboard replies  
-
----
-
-## 🧠 How It Works
-
-```
-User Browser (index.html)
-          ↓
-      POST /ask
-          ↓
-   Java HTTP Server
-          ↓
- Local DB → Cache → Gemini AI
+```text
+Browser
+   ↓ POST /ask
+Java HTTP server
+   ↓
+Cache
+   ↓ miss
+Local knowledge
+   ↓ miss
+Gemini API
+   ↓
+Structured response
 ```
 
-1. User sends a question  
-2. Server checks cache  
-3. If not cached, checks local medical DB  
-4. If not found, queries Gemini AI  
-5. Response is cached and returned  
+## Features
 
----
+### Backend
 
-## 📂 Project Structure
+- Java 17+ HTTP server
+- `POST /ask` endpoint
+- Gemini API integration
+- Local health-information fallback
+- In-memory cache with documented TTL
+- Request timeouts and error handling
+- CORS handling
 
-```
-healthai-pro-plus/
-│
-├── HealthAIProPlus.java   # Java backend server
-├── index.html             # Frontend UI
+### Frontend
+
+- Browser-based chat interface
+- Guest/login-style UI flows
+- LocalStorage chat persistence
+- Voice input through Web Speech API
+- Dark/light theme
+- Copy and export chat actions
+
+## Project structure
+
+```text
+.
+├── HealthAIProPlus.java
+├── index.html
 ├── README.md
 └── LICENSE
 ```
 
----
+## Requirements
 
-## ⚙️ Requirements
+- Java 17 or newer
+- A Gemini API key for AI-backed responses
+- `org.json` dependency used by the current Java implementation
 
-- Java 17+  
-- Google Gemini API Key  
-- org.json library  
+## Setup
 
-Download JSON library:  
-https://repo1.maven.org/maven2/org/json/json/20230227/json-20230227.jar  
-
----
-
-## 🔧 Setup Instructions
-
-### 1. Clone Repository
+Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/healthai-pro-plus.git
-cd healthai-pro-plus
+git clone https://github.com/mohith-krishnaa/healthai-java-chatbot.git
+cd healthai-java-chatbot
 ```
 
----
+Download the `org.json` JAR version required by the current source and keep it outside source control.
 
-### 2. Add Gemini API Key
+### API key
 
-Edit in `HealthAIProPlus.java`:
+Do **not** commit a real API key into Java source code. Use an environment variable or another local secret mechanism when adapting the application for deployment.
 
-```java
-private static final String GEMINI_API_KEY = "YOUR_API_KEY_HERE";
-```
+If the current implementation still contains a source-level key placeholder, replace it with your local configuration before running.
 
----
+### Compile
 
-### 3. Compile
+Windows classpath syntax:
 
-**Windows**
-
-```bash
+```powershell
 javac -cp ".;json-20230227.jar" HealthAIProPlus.java
 ```
 
-**Linux / macOS**
+Linux/macOS classpath syntax:
 
 ```bash
 javac -cp ".:json-20230227.jar" HealthAIProPlus.java
 ```
 
----
-
-### 4. Run Server
+### Run
 
 ```bash
 java -cp ".;json-20230227.jar" HealthAIProPlus
 ```
 
-Server starts at:
+The documented development server runs on `http://localhost:8080`.
 
-```
-http://localhost:8080
-```
+## API
 
----
+### `POST /ask`
 
-## 🔌 API Usage
-
-### Endpoint
-
-```
-POST /ask
-```
-
-### Request
+Example request:
 
 ```json
 {
-  "message": "Tell me about malaria"
+  "message": "What is malaria?"
 }
 ```
 
-### Response
+The response identifies the source used by the application, such as local knowledge, cache, or Gemini, according to the current implementation.
 
-```json
-{
-  "timestamp": "2026-01-17T12:30:22Z",
-  "query": "Tell me about malaria",
-  "structured": true,
-  "reply": "Malaria is a life-threatening infectious disease...",
-  "source": "local"
-}
-```
+## Safety and limitations
 
-Sources:
+This project should not be presented as a clinically validated medical system. A model-generated response can be incomplete or wrong, and the local dataset is limited.
 
-- `local` → Offline database  
-- `cache` → In-memory cache  
-- `gemini` → Google Gemini AI  
+Important production gaps include:
 
----
+- No clinical validation of the knowledge base
+- No persistent user database
+- No demonstrated authentication boundary for sensitive data
+- Browser LocalStorage is not suitable for confidential medical records
+- Gemini output requires independent validation
+- Caching can return stale information
 
-## 🗄 Built-in Medical Database
+## Roadmap
 
-Includes offline knowledge for:
+Potential engineering improvements:
 
-- Malaria  
-- Dengue  
-- COVID-19  
-- Typhoid  
-- Asthma  
-- Diarrhea  
-- Pink Eye  
-- Jock Itch  
-- Stomach Flu  
+- Move secrets to environment-based configuration
+- Add automated Java tests
+- Add structured logging
+- Add persistent storage with explicit privacy controls
+- Add authentication and authorization
+- Add model-response evaluation tests
+- Add source citations to generated health information
 
----
+## License
 
-## 🔐 Safety Design
+MIT License. See `LICENSE` for details.
 
-- No prescriptions generated  
-- No emergency instructions  
-- Medical disclaimer added to responses  
-- AI restricted strictly to medical topics  
+## Author
 
----
-
-## 🛣 Roadmap
-
-- JWT authentication system  
-- Persistent database (PostgreSQL)  
-- Doctor-reviewed datasets  
-- User profiles & history sync  
-- Admin analytics dashboard  
-
----
-
-## 👨‍💻 Author
-
-**Mohith Krishnaa Putta**  
-Backend & Automation Developer  
-
----
-
-## 📜 License
-
-MIT License
+**Mohith Krishnaa** — [@mohith-krishnaa](https://github.com/mohith-krishnaa)
