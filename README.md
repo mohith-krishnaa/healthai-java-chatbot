@@ -17,25 +17,26 @@ Local knowledge
    ↓ miss
 Gemini API
    ↓
-Structured response
+Response
 ```
 
 ## Features
 
 ### Backend
 
-- Java 17+ HTTP server
+- Java HTTP server
 - `POST /ask` endpoint
 - Gemini API integration
 - Local health-information fallback
-- In-memory cache with documented TTL
-- Request timeouts and error handling
+- In-memory cache with a 6-hour TTL
+- Request size limit
+- HTTP timeouts and error handling
 - CORS handling
+- API key loaded from `GEMINI_API_KEY`
 
 ### Frontend
 
 - Browser-based chat interface
-- Guest/login-style UI flows
 - LocalStorage chat persistence
 - Voice input through Web Speech API
 - Dark/light theme
@@ -47,6 +48,8 @@ Structured response
 .
 ├── HealthAIProPlus.java
 ├── index.html
+├── .env.example
+├── .gitignore
 ├── README.md
 └── LICENSE
 ```
@@ -54,8 +57,8 @@ Structured response
 ## Requirements
 
 - Java 17 or newer
+- `org.json` dependency required by the Java source
 - A Gemini API key for AI-backed responses
-- `org.json` dependency used by the current Java implementation
 
 ## Setup
 
@@ -66,23 +69,35 @@ git clone https://github.com/mohith-krishnaa/healthai-java-chatbot.git
 cd healthai-java-chatbot
 ```
 
-Download the `org.json` JAR version required by the current source and keep it outside source control.
+Download a compatible `org.json` JAR and keep the JAR outside source control.
 
-### API key
+### Configure Gemini
 
-Do **not** commit a real API key into Java source code. Use an environment variable or another local secret mechanism when adapting the application for deployment.
+Set the API key as an environment variable. **Do not put a real key in `HealthAIProPlus.java`.**
 
-If the current implementation still contains a source-level key placeholder, replace it with your local configuration before running.
+Windows PowerShell:
+
+```powershell
+$env:GEMINI_API_KEY="your_api_key_here"
+```
+
+Linux/macOS:
+
+```bash
+export GEMINI_API_KEY="your_api_key_here"
+```
+
+A `.env.example` file is provided as a reference, but this plain Java application does not automatically load `.env` files. The variable must exist in the process environment unless you add a dotenv library yourself.
 
 ### Compile
 
-Windows classpath syntax:
+Windows:
 
 ```powershell
 javac -cp ".;json-20230227.jar" HealthAIProPlus.java
 ```
 
-Linux/macOS classpath syntax:
+Linux/macOS:
 
 ```bash
 javac -cp ".:json-20230227.jar" HealthAIProPlus.java
@@ -90,17 +105,25 @@ javac -cp ".:json-20230227.jar" HealthAIProPlus.java
 
 ### Run
 
-```bash
+Windows:
+
+```powershell
 java -cp ".;json-20230227.jar" HealthAIProPlus
 ```
 
-The documented development server runs on `http://localhost:8080`.
+Linux/macOS:
+
+```bash
+java -cp ".:json-20230227.jar" HealthAIProPlus
+```
+
+Open `http://localhost:8080` after the server starts.
 
 ## API
 
 ### `POST /ask`
 
-Example request:
+Request:
 
 ```json
 {
@@ -108,32 +131,33 @@ Example request:
 }
 ```
 
-The response identifies the source used by the application, such as local knowledge, cache, or Gemini, according to the current implementation.
+The response includes the generated reply and a `source` value indicating whether the response came from local knowledge, cache, or Gemini.
 
 ## Safety and limitations
 
-This project should not be presented as a clinically validated medical system. A model-generated response can be incomplete or wrong, and the local dataset is limited.
+This project is **not clinically validated**. Model-generated health information can be incomplete or incorrect, and the local dataset is intentionally limited.
+
+Do not use the application for emergency decisions or as a replacement for a qualified healthcare professional.
 
 Important production gaps include:
 
 - No clinical validation of the knowledge base
 - No persistent user database
-- No demonstrated authentication boundary for sensitive data
+- No authentication boundary for sensitive medical data
 - Browser LocalStorage is not suitable for confidential medical records
 - Gemini output requires independent validation
-- Caching can return stale information
+- Cache entries can become stale
+- CORS is currently permissive and should be restricted before production deployment
 
 ## Roadmap
 
-Potential engineering improvements:
-
-- Move secrets to environment-based configuration
 - Add automated Java tests
 - Add structured logging
 - Add persistent storage with explicit privacy controls
 - Add authentication and authorization
 - Add model-response evaluation tests
 - Add source citations to generated health information
+- Restrict CORS for production deployments
 
 ## License
 
