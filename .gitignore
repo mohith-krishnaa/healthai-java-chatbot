@@ -1,0 +1,19 @@
+# Java build output
+*.class
+out/
+build/
+
+# Local dependencies
+*.jar
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime / IDE
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
