@@ -24,6 +24,8 @@ import java.util.concurrent.*;
 
 public class HealthAIProPlus {
     private static final int PORT = 8080;
+    private static final int MAX_REQUEST_BYTES = 16 * 1024;
+    private static final int MAX_CACHE_ENTRIES = 500;
     private static final String GEMINI_API_KEY = System.getenv("GEMINI_API_KEY");
     private static final String GEMINI_MODEL = "gemini-2.5-flash";
     private static final long CACHE_TTL_MS = 1000L * 60 * 60 * 6;
@@ -67,7 +69,13 @@ public class HealthAIProPlus {
                 ex.sendResponseHeaders(204, -1); return;
             }
             if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) { sendJson(ex, 405, new JSONObject().put("error", "Method Not Allowed")); return; }
-            String body = readAll(ex.getRequestBody());
+            String body;
+            try {
+                body = readLimited(ex.getRequestBody(), MAX_REQUEST_BYTES);
+            } catch (RequestTooLargeException e) {
+                sendJson(ex, 413, new JSONObject().put("error", "Request body is too large"));
+                return;
+            }
             if (body == null || body.isBlank()) { sendJson(ex, 400, new JSONObject().put("error", "Empty body")); return; }
             try {
                 JSONObject req = new JSONObject(body);
@@ -113,7 +121,18 @@ public class HealthAIProPlus {
         out.put("structured", false); out.put("reply", "Sorry, I couldn't fetch details at the moment. Try again later."); out.put("source", "none"); return out;
     }
 
-    private static void putCache(String key, String value) { cache.put(key, value); cacheTs.put(key, System.currentTimeMillis()); }
+    private static void putCache(String key, String value) {
+        if (cache.size() >= MAX_CACHE_ENTRIES && !cache.containsKey(key)) {
+            String oldestKey = null;
+            long oldest = Long.MAX_VALUE;
+            for (Map.Entry<String, Long> entry : cacheTs.entrySet()) {
+                if (entry.getValue() < oldest) { oldest = entry.getValue(); oldestKey = entry.getKey(); }
+            }
+            if (oldestKey != null) { cache.remove(oldestKey); cacheTs.remove(oldestKey); }
+        }
+        cache.put(key, value);
+        cacheTs.put(key, System.currentTimeMillis());
+    }
 
     private static String formatLocalResponse(JSONObject local, String key) {
         StringBuilder sb = new StringBuilder();
@@ -146,7 +165,7 @@ public class HealthAIProPlus {
             int code = conn.getResponseCode();
             InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
             if (stream == null || code < 200 || code >= 300) return null;
-            JSONObject response = new JSONObject(readAll(stream));
+            JSONObject response = new JSONObject(readLimited(stream, MAX_REQUEST_BYTES));
             JSONArray candidates = response.optJSONArray("candidates");
             if (candidates == null || candidates.length() == 0) return null;
             JSONObject candidate = candidates.optJSONObject(0);
@@ -155,7 +174,9 @@ public class HealthAIProPlus {
             if (content == null) return null;
             JSONArray parts = content.optJSONArray("parts");
             if (parts == null || parts.length() == 0) return null;
-            String text = parts.optJSONObject(0).optString("text", "").trim();
+            JSONObject firstPart = parts.optJSONObject(0);
+            if (firstPart == null) return null;
+            String text = firstPart.optString("text", "").trim();
             return text.isEmpty() ? null : text;
         } catch (Exception e) { System.err.println("Gemini call failed: " + e.getMessage()); return null; }
         finally { if (conn != null) conn.disconnect(); }
@@ -178,7 +199,23 @@ public class HealthAIProPlus {
     }
     private static JSONObject findLocal(String query) { String q=query.toLowerCase(Locale.ROOT); if(localDB.containsKey(q))return localDB.get(q); for(String k:localDB.keySet())if(q.contains(k)||k.contains(q))return localDB.get(k); for(String token:q.split("\\s+"))if(localDB.containsKey(token))return localDB.get(token); return null; }
     private static boolean isGreeting(String low) { String[] g={"hi","hello","hey","good morning","good afternoon","good evening"}; for(String s:g)if(low.contains(s))return true; return false; }
-    private static String readAll(InputStream in)throws IOException{if(in==null)return null;try(BufferedReader br=new BufferedReader(new InputStreamReader(in,StandardCharsets.UTF_8))){StringBuilder sb=new StringBuilder();String line;while((line=br.readLine())!=null)sb.append(line).append('\n');return sb.toString().trim();}}
+
+    private static String readLimited(InputStream in, int maxBytes) throws IOException, RequestTooLargeException {
+        if (in == null) return null;
+        try (InputStream stream = in; ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(maxBytes, 8192))) {
+            byte[] buffer = new byte[4096];
+            int total = 0, n;
+            while ((n = stream.read(buffer)) != -1) {
+                total += n;
+                if (total > maxBytes) throw new RequestTooLargeException();
+                out.write(buffer, 0, n);
+            }
+            return out.toString(StandardCharsets.UTF_8);
+        }
+    }
+
+    private static class RequestTooLargeException extends Exception {}
+
     private static void sendJson(HttpExchange ex,int code,JSONObject obj)throws IOException{byte[]b=obj.toString().getBytes(StandardCharsets.UTF_8);ex.getResponseHeaders().set("Content-Type","application/json; charset=UTF-8");ex.sendResponseHeaders(code,b.length);try(OutputStream os=ex.getResponseBody()){os.write(b);}}
     private static void sendPlain(HttpExchange ex,int code,String txt)throws IOException{byte[]b=txt.getBytes(StandardCharsets.UTF_8);ex.getResponseHeaders().set("Content-Type","text/plain; charset=UTF-8");ex.sendResponseHeaders(code,b.length);try(OutputStream os=ex.getResponseBody()){os.write(b);}}
     private static void enableCORS(HttpExchange ex){ex.getResponseHeaders().set("Access-Control-Allow-Origin","*");ex.getResponseHeaders().set("Access-Control-Allow-Headers","Content-Type");ex.getResponseHeaders().set("Access-Control-Allow-Methods","POST, OPTIONS");}
