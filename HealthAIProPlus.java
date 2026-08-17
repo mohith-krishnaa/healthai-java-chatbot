@@ -1,183 +1,22 @@
-/*
- HealthAIProPlus.java
- - Single-file Java backend serving a professional health chatbot UI and /ask endpoint.
- - Integrates Google Gemini when GEMINI_API_KEY is configured.
- - Local disease DB fallback and in-memory cache.
- - Requires org.json (json-20230227.jar) on the classpath.
-*/
-import com.sun.net.httpserver.*;
-import org.json.*;
-import java.io.*;
-import java.net.*;
-import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.util.*;
-import java.util.concurrent.*;
-
+/* HealthAIProPlus.java - educational health-information backend. Requires org.json. */
+import com.sun.net.httpserver.*; import org.json.*; import java.io.*; import java.net.*; import java.nio.charset.StandardCharsets; import java.time.Instant; import java.util.*; import java.util.concurrent.*;
 public class HealthAIProPlus {
-    private static final int PORT = 8080;
-    private static final int MAX_REQUEST_BYTES = 16 * 1024;
-    private static final int MAX_CACHE_ENTRIES = 500;
-    private static final String GEMINI_API_KEY = System.getenv("GEMINI_API_KEY");
-    private static final String GEMINI_MODEL = "gemini-2.5-flash";
-    private static final long CACHE_TTL_MS = 1000L * 60 * 60 * 6;
-    private static final String ALLOWED_ORIGIN = "https://mohith-krishnaa.github.io";
-
-    private static final Map<String, JSONObject> localDB = new ConcurrentHashMap<>();
-    private static final Map<String, String> cache = new ConcurrentHashMap<>();
-    private static final Map<String, Long> cacheTs = new ConcurrentHashMap<>();
-
-    public static void main(String[] args) throws Exception {
-        System.out.println("Starting HealthAI Pro+ on http://localhost:" + PORT + " ...");
-        initializeLocalDB();
-        HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
-        server.createContext("/", new RootHandler());
-        server.createContext("/ask", new AskHandler());
-        server.setExecutor(Executors.newFixedThreadPool(16));
-        server.start();
-        System.out.println("HealthAI Pro+ ready. Open http://localhost:" + PORT);
-        if (GEMINI_API_KEY == null || GEMINI_API_KEY.isBlank()) System.out.println("Gemini API key not configured; local knowledge fallback remains available.");
-    }
-
-    static class RootHandler implements HttpHandler {
-        @Override public void handle(HttpExchange ex) throws IOException {
-            if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) { sendPlain(ex, 405, "Method Not Allowed"); return; }
-            File f = new File("index.html");
-            if (!f.exists()) { sendPlain(ex, 404, "index.html not found"); return; }
-            byte[] bytes = java.nio.file.Files.readAllBytes(f.toPath());
-            ex.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
-            ex.sendResponseHeaders(200, bytes.length);
-            try (OutputStream os = ex.getResponseBody()) { os.write(bytes); }
-        }
-    }
-
-    static class AskHandler implements HttpHandler {
-        @Override public void handle(HttpExchange ex) throws IOException {
-            if (!setCORS(ex)) { sendJson(ex, 403, new JSONObject().put("error", "Origin not allowed")); return; }
-            if ("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())) { ex.sendResponseHeaders(204, -1); return; }
-            if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) { sendJson(ex, 405, new JSONObject().put("error", "Method Not Allowed")); return; }
-            String body;
-            try { body = readLimited(ex.getRequestBody(), MAX_REQUEST_BYTES); }
-            catch (RequestTooLargeException e) { sendJson(ex, 413, new JSONObject().put("error", "Request body is too large")); return; }
-            if (body == null || body.isBlank()) { sendJson(ex, 400, new JSONObject().put("error", "Empty body")); return; }
-            try {
-                JSONObject req = new JSONObject(body);
-                String message = req.optString("message", "").trim();
-                if (message.isEmpty()) { sendJson(ex, 400, new JSONObject().put("error", "Missing 'message'")); return; }
-                if (message.length() > 4000) { sendJson(ex, 413, new JSONObject().put("error", "Message is too long")); return; }
-                sendJson(ex, 200, processQuery(message));
-            } catch (JSONException je) { sendJson(ex, 400, new JSONObject().put("error", "Invalid JSON")); }
-            catch (Exception e) { System.err.println("Request failed: " + e.getMessage()); sendJson(ex, 500, new JSONObject().put("error", "Internal server error")); }
-        }
-    }
-
-    private static JSONObject processQuery(String message) {
-        JSONObject out = new JSONObject();
-        out.put("timestamp", Instant.now().toString());
-        out.put("query", message);
-        String key = message.toLowerCase(Locale.ROOT).trim();
-        if (isGreeting(key)) { out.put("structured", false); out.put("reply", "👋 Hello — I’m HealthAI Pro+. Ask about diseases, symptoms, prevention, and general treatments. This assistant provides informational content only."); out.put("source", "local"); return out; }
-        Long timestamp = cacheTs.get(key);
-        if (timestamp != null && System.currentTimeMillis() - timestamp < CACHE_TTL_MS) {
-            String cached = cache.get(key);
-            if (cached != null) { out.put("structured", true); out.put("reply", cached); out.put("source", "cache"); return out; }
-        } else { cache.remove(key); cacheTs.remove(key); }
-        JSONObject local = findLocal(key);
-        if (local != null) { String replyText = formatLocalResponse(local, key); putCache(key, replyText); out.put("structured", true); out.put("reply", replyText); out.put("source", "local"); return out; }
-        String ai = callGemini(message);
-        if (ai != null && !ai.isBlank()) { putCache(key, ai); out.put("structured", true); out.put("reply", ai); out.put("source", "gemini"); return out; }
-        out.put("structured", false); out.put("reply", "Sorry, I couldn't fetch details at the moment. Try again later."); out.put("source", "none"); return out;
-    }
-
-    private static void putCache(String key, String value) {
-        if (cache.size() >= MAX_CACHE_ENTRIES && !cache.containsKey(key)) {
-            String oldestKey = null; long oldest = Long.MAX_VALUE;
-            for (Map.Entry<String, Long> entry : cacheTs.entrySet()) if (entry.getValue() < oldest) { oldest = entry.getValue(); oldestKey = entry.getKey(); }
-            if (oldestKey != null) { cache.remove(oldestKey); cacheTs.remove(oldestKey); }
-        }
-        cache.put(key, value); cacheTs.put(key, System.currentTimeMillis());
-    }
-
-    private static String formatLocalResponse(JSONObject local, String key) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(capitalizeWords(local.optString("name", key))).append("\n\n");
-        sb.append(local.optString("description", "")).append("\n\n");
-        appendArray(sb, "Symptoms", local.optJSONArray("symptoms"));
-        appendArray(sb, "Prevention", local.optJSONArray("prevention"));
-        sb.append("⚕️ Disclaimer: This information is for educational purposes only.");
-        return sb.toString();
-    }
-
-    private static void appendArray(StringBuilder sb, String label, JSONArray array) {
-        if (array == null || array.length() == 0) return;
-        sb.append(label).append(": ");
-        for (int i = 0; i < array.length(); i++) { sb.append(array.optString(i)); if (i < array.length() - 1) sb.append(", "); }
-        sb.append(".\n\n");
-    }
-
-    private static String callGemini(String message) {
-        if (GEMINI_API_KEY == null || GEMINI_API_KEY.isBlank()) return null;
-        HttpURLConnection conn = null;
-        try {
-            String endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" + GEMINI_MODEL + ":generateContent?key=" + URLEncoder.encode(GEMINI_API_KEY, StandardCharsets.UTF_8);
-            conn = (HttpURLConnection) new URL(endpoint).openConnection();
-            conn.setRequestMethod("POST"); conn.setConnectTimeout(8000); conn.setReadTimeout(16000);
-            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8"); conn.setDoOutput(true);
-            String prompt = "You are HealthAI Pro+, an educational health-information assistant. Do not diagnose, prescribe medication, or replace professional medical care. For emergencies, advise the user to contact appropriate local emergency or medical services. Always include this disclaimer: '⚕️ Disclaimer: This information is for educational purposes only.'\n\nUser question: " + message;
-            JSONObject payload = new JSONObject().put("contents", new JSONArray().put(new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", prompt)))));
-            try (OutputStream os = conn.getOutputStream()) { os.write(payload.toString().getBytes(StandardCharsets.UTF_8)); }
-            int code = conn.getResponseCode();
-            InputStream stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
-            if (stream == null || code < 200 || code >= 300) return null;
-            JSONObject response = new JSONObject(readLimited(stream, MAX_REQUEST_BYTES));
-            JSONArray candidates = response.optJSONArray("candidates"); if (candidates == null || candidates.length() == 0) return null;
-            JSONObject candidate = candidates.optJSONObject(0); if (candidate == null) return null;
-            JSONObject content = candidate.optJSONObject("content"); if (content == null) return null;
-            JSONArray parts = content.optJSONArray("parts"); if (parts == null || parts.length() == 0) return null;
-            JSONObject firstPart = parts.optJSONObject(0); if (firstPart == null) return null;
-            String text = firstPart.optString("text", "").trim(); return text.isEmpty() ? null : text;
-        } catch (Exception e) { System.err.println("Gemini call failed: " + e.getMessage()); return null; }
-        finally { if (conn != null) conn.disconnect(); }
-    }
-
-    private static void initializeLocalDB() {
-        addLocal("malaria", "Malaria is a life-threatening infectious disease caused by Plasmodium parasites, transmitted by Anopheles mosquitoes.", new String[]{"Fever", "Chills", "Headache", "Sweating", "Nausea"}, new String[]{"Use insecticide-treated nets", "Take antimalarial drugs when prescribed", "Avoid mosquito bites"});
-        addLocal("dengue", "Dengue is a mosquito-borne viral infection causing high fever, severe headache, pain behind the eyes, joint pain and rash.", new String[]{"High fever", "Severe headache", "Joint and muscle pain", "Rash"}, new String[]{"Avoid mosquito bites", "Remove standing water", "Use repellents and nets"});
-        addLocal("jock itch", "Jock itch (tinea cruris) is a fungal infection of the groin area causing itchy, red, ring-shaped rashes.", new String[]{"Itchy groin rash", "Redness", "Scaling"}, new String[]{"Keep the area dry", "Use antifungal powders", "Avoid tight clothing"});
-        addLocal("diarrhea", "Diarrhea (loose motions) involves frequent watery stools, often caused by infections or contaminated food/water. The main risk is dehydration.", new String[]{"Loose stools", "Abdominal cramps", "Dehydration"}, new String[]{"Oral rehydration solutions (ORS)", "Safe drinking water", "Hand hygiene"});
-        addLocal("covid-19", "COVID-19 is an infectious disease caused by the SARS-CoV-2 virus, affecting the respiratory tract and sometimes other organs.", new String[]{"Fever", "Cough", "Loss of smell/taste", "Shortness of breath"}, new String[]{"Vaccination", "Masking in crowded places", "Hand hygiene"});
-        addLocal("pink eye", "Conjunctivitis (pink eye) is inflammation of the conjunctiva due to viruses, bacteria or allergies, causing red eye and discharge.", new String[]{"Redness", "Discharge", "Itching"}, new String[]{"Avoid touching eyes", "Hand hygiene", "See doctor if vision changes"});
-        addLocal("typhoid", "Typhoid fever is an infection by Salmonella Typhi, spread through contaminated food or water, causing prolonged fever and systemic illness.", new String[]{"High fever", "Stomach pain", "Headache", "Weakness"}, new String[]{"Safe water and food", "Hand hygiene", "Vaccination in high-risk areas"});
-        addLocal("stomach flu", "Gastroenteritis (stomach flu) causes vomiting, diarrhea and abdominal cramps often due to viral or bacterial infections.", new String[]{"Nausea", "Vomiting", "Diarrhea", "Abdominal cramps"}, new String[]{"Hydration", "Safe food handling", "Hand hygiene"});
-        addLocal("asthma", "Asthma is a chronic lung condition causing wheeze, breathlessness and chest tightness; managed with inhalers and trigger avoidance.", new String[]{"Wheezing", "Shortness of breath", "Chest tightness"}, new String[]{"Use prescribed inhalers", "Avoid triggers", "Regular follow-ups"});
-    }
-    private static void addLocal(String key, String desc, String[] symptoms, String[] prevention) { JSONObject o = new JSONObject(); o.put("name", key); o.put("description", desc); o.put("symptoms", new JSONArray(Arrays.asList(symptoms))); o.put("prevention", new JSONArray(Arrays.asList(prevention))); localDB.put(key.toLowerCase(Locale.ROOT), o); }
-    private static JSONObject findLocal(String query) { String q=query.toLowerCase(Locale.ROOT); if(localDB.containsKey(q))return localDB.get(q); for(String k:localDB.keySet())if(q.contains(k)||k.contains(q))return localDB.get(k); for(String token:q.split("\\s+"))if(localDB.containsKey(token))return localDB.get(token); return null; }
-    private static boolean isGreeting(String low) { String[] g={"hi","hello","hey","good morning","good afternoon","good evening"}; for(String s:g)if(low.contains(s))return true; return false; }
-
-    private static String readLimited(InputStream in, int maxBytes) throws IOException, RequestTooLargeException {
-        if (in == null) return null;
-        try (InputStream stream = in; ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(maxBytes, 8192))) {
-            byte[] buffer = new byte[4096]; int total = 0, n;
-            while ((n = stream.read(buffer)) != -1) { total += n; if (total > maxBytes) throw new RequestTooLargeException(); out.write(buffer, 0, n); }
-            return out.toString(StandardCharsets.UTF_8);
-        }
-    }
-    private static class RequestTooLargeException extends Exception {}
-
-    private static boolean setCORS(HttpExchange ex) {
-        String origin = ex.getRequestHeaders().getFirst("Origin");
-        if (origin == null || origin.isBlank()) return true;
-        if (ALLOWED_ORIGIN.equals(origin) || "http://localhost:8080".equals(origin) || "http://127.0.0.1:8080".equals(origin)) {
-            ex.getResponseHeaders().set("Access-Control-Allow-Origin", origin);
-            ex.getResponseHeaders().set("Vary", "Origin");
-            ex.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
-            ex.getResponseHeaders().set("Access-Control-Allow-Methods", "POST, OPTIONS");
-            return true;
-        }
-        return false;
-    }
-    private static void sendJson(HttpExchange ex,int code,JSONObject obj)throws IOException{byte[]b=obj.toString().getBytes(StandardCharsets.UTF_8);ex.getResponseHeaders().set("Content-Type","application/json; charset=UTF-8");ex.sendResponseHeaders(code,b.length);try(OutputStream os=ex.getResponseBody()){os.write(b);}}
-    private static void sendPlain(HttpExchange ex,int code,String txt)throws IOException{byte[]b=txt.getBytes(StandardCharsets.UTF_8);ex.getResponseHeaders().set("Content-Type","text/plain; charset=UTF-8");ex.sendResponseHeaders(code,b.length);try(OutputStream os=ex.getResponseBody()){os.write(b);}}
-    private static String capitalizeWords(String s){StringBuilder sb=new StringBuilder();for(String part:s.split("\\s+")){if(part.isEmpty())continue;if(sb.length()>0)sb.append(' ');sb.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1));}return sb.toString();}
+ private static final int PORT=8080, MAX_REQUEST_BYTES=16*1024, MAX_CACHE_ENTRIES=500, RATE_LIMIT=10; private static final long RATE_WINDOW_MS=60_000L, CACHE_TTL_MS=1000L*60*60*6;
+ private static final String GEMINI_API_KEY=System.getenv("GEMINI_API_KEY"), GEMINI_MODEL="gemini-2.5-flash", ALLOWED_ORIGIN="https://mohith-krishnaa.github.io";
+ private static final Map<String,JSONObject> localDB=new ConcurrentHashMap<>(); private static final Map<String,String> cache=new ConcurrentHashMap<>(); private static final Map<String,Long> cacheTs=new ConcurrentHashMap<>(); private static final Map<String,Deque<Long>> rate=new ConcurrentHashMap<>();
+ public static void main(String[] args)throws Exception{initializeLocalDB(); HttpServer s=HttpServer.create(new InetSocketAddress(PORT),0); s.createContext("/",new RootHandler()); s.createContext("/ask",new AskHandler()); s.setExecutor(Executors.newFixedThreadPool(16)); s.start(); System.out.println("HealthAI Pro+ ready on http://localhost:"+PORT);}
+ static class RootHandler implements HttpHandler{public void handle(HttpExchange ex)throws IOException{if(!"GET".equalsIgnoreCase(ex.getRequestMethod())){sendPlain(ex,405,"Method Not Allowed");return;}File f=new File("index.html");if(!f.exists()){sendPlain(ex,404,"index.html not found");return;}byte[] b=java.nio.file.Files.readAllBytes(f.toPath());ex.getResponseHeaders().set("Content-Type","text/html; charset=UTF-8");ex.sendResponseHeaders(200,b.length);try(OutputStream o=ex.getResponseBody()){o.write(b);}}}
+ static class AskHandler implements HttpHandler{public void handle(HttpExchange ex)throws IOException{if(!setCORS(ex)){sendJson(ex,403,new JSONObject().put("error","Origin not allowed"));return;}if("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())){ex.sendResponseHeaders(204,-1);return;}if(!"POST".equalsIgnoreCase(ex.getRequestMethod())){sendJson(ex,405,new JSONObject().put("error","Method Not Allowed"));return;}String ip=clientKey(ex);if(!allow(ip)){sendJson(ex,429,new JSONObject().put("error","Too many requests. Try again later."));return;}String body;try{body=readLimited(ex.getRequestBody(),MAX_REQUEST_BYTES);}catch(RequestTooLargeException e){sendJson(ex,413,new JSONObject().put("error","Request body is too large"));return;}if(body==null||body.isBlank()){sendJson(ex,400,new JSONObject().put("error","Empty body"));return;}try{JSONObject req=new JSONObject(body);String msg=req.optString("message","").trim();if(msg.isEmpty()){sendJson(ex,400,new JSONObject().put("error","Missing 'message'"));return;}if(msg.length()>4000){sendJson(ex,413,new JSONObject().put("error","Message is too long"));return;}sendJson(ex,200,processQuery(msg));}catch(JSONException e){sendJson(ex,400,new JSONObject().put("error","Invalid JSON"));}catch(Exception e){System.err.println("Request failed: "+e.getMessage());sendJson(ex,500,new JSONObject().put("error","Internal server error"));}}}
+ private static String clientKey(HttpExchange ex){String forwarded=ex.getRequestHeaders().getFirst("X-Forwarded-For");if(forwarded!=null&&!forwarded.isBlank())return forwarded.split(",")[0].trim();InetSocketAddress a=ex.getRemoteAddress();return a==null?"unknown":a.getAddress().getHostAddress();}
+ private static boolean allow(String key){long now=System.currentTimeMillis();Deque<Long> q=rate.computeIfAbsent(key,k->new ArrayDeque<>());synchronized(q){while(!q.isEmpty()&&now-q.peekFirst()>=RATE_WINDOW_MS)q.removeFirst();if(q.size()>=RATE_LIMIT)return false;q.addLast(now);}if(rate.size()>2000)rate.entrySet().removeIf(e->{Deque<Long> d=e.getValue();synchronized(d){return d.isEmpty()||now-d.peekLast()>=RATE_WINDOW_MS;}});return true;}
+ private static JSONObject processQuery(String message){JSONObject o=new JSONObject().put("timestamp",Instant.now().toString()).put("query",message);String k=message.toLowerCase(Locale.ROOT).trim();if(isGreeting(k))return o.put("structured",false).put("reply","👋 Hello — I’m HealthAI Pro+. Ask about diseases, symptoms, prevention, and general treatments. This assistant provides informational content only.").put("source","local");Long t=cacheTs.get(k);if(t!=null&&System.currentTimeMillis()-t<CACHE_TTL_MS){String c=cache.get(k);if(c!=null)return o.put("structured",true).put("reply",c).put("source","cache");}else{cache.remove(k);cacheTs.remove(k);}JSONObject local=findLocal(k);if(local!=null){String r=formatLocalResponse(local,k);putCache(k,r);return o.put("structured",true).put("reply",r).put("source","local");}String ai=callGemini(message);if(ai!=null&&!ai.isBlank()){putCache(k,ai);return o.put("structured",true).put("reply",ai).put("source","gemini");}return o.put("structured",false).put("reply","Sorry, I couldn't fetch details at the moment. Try again later.").put("source","none");}
+ private static void putCache(String k,String v){if(cache.size()>=MAX_CACHE_ENTRIES&&!cache.containsKey(k)){String old=null;long t=Long.MAX_VALUE;for(Map.Entry<String,Long>e:cacheTs.entrySet())if(e.getValue()<t){t=e.getValue();old=e.getKey();}if(old!=null){cache.remove(old);cacheTs.remove(old);}}cache.put(k,v);cacheTs.put(k,System.currentTimeMillis());}
+ private static String formatLocalResponse(JSONObject l,String k){StringBuilder s=new StringBuilder();s.append(capitalizeWords(l.optString("name",k))).append("\n\n").append(l.optString("description","")).append("\n\n");appendArray(s,"Symptoms",l.optJSONArray("symptoms"));appendArray(s,"Prevention",l.optJSONArray("prevention"));return s.append("⚕️ Disclaimer: This information is for educational purposes only.").toString();}
+ private static void appendArray(StringBuilder s,String label,JSONArray a){if(a==null||a.length()==0)return;s.append(label).append(": ");for(int i=0;i<a.length();i++){s.append(a.optString(i));if(i<a.length()-1)s.append(", ");}s.append(".\n\n");}
+ private static String callGemini(String message){if(GEMINI_API_KEY==null||GEMINI_API_KEY.isBlank())return null;HttpURLConnection c=null;try{String ep="https://generativelanguage.googleapis.com/v1beta/models/"+GEMINI_MODEL+":generateContent?key="+URLEncoder.encode(GEMINI_API_KEY,StandardCharsets.UTF_8);c=(HttpURLConnection)new URL(ep).openConnection();c.setRequestMethod("POST");c.setConnectTimeout(8000);c.setReadTimeout(16000);c.setRequestProperty("Content-Type","application/json; charset=UTF-8");c.setDoOutput(true);String p="You are HealthAI Pro+, an educational health-information assistant. Do not diagnose, prescribe medication, or replace professional medical care. For emergencies, advise the user to contact appropriate local emergency or medical services. Always include this disclaimer: '⚕️ Disclaimer: This information is for educational purposes only.'\n\nUser question: "+message;JSONObject payload=new JSONObject().put("contents",new JSONArray().put(new JSONObject().put("parts",new JSONArray().put(new JSONObject().put("text",p)))));try(OutputStream o=c.getOutputStream()){o.write(payload.toString().getBytes(StandardCharsets.UTF_8));}int code=c.getResponseCode();InputStream in=code>=200&&code<300?c.getInputStream():c.getErrorStream();if(in==null||code<200||code>=300)return null;JSONObject r=new JSONObject(readLimited(in,MAX_REQUEST_BYTES));JSONArray cs=r.optJSONArray("candidates");if(cs==null||cs.length()==0)return null;JSONObject ct=cs.optJSONObject(0);if(ct==null)return null;JSONObject content=ct.optJSONObject("content");if(content==null)return null;JSONArray parts=content.optJSONArray("parts");if(parts==null||parts.length()==0)return null;JSONObject part=parts.optJSONObject(0);if(part==null)return null;String text=part.optString("text","").trim();return text.isEmpty()?null:text;}catch(Exception e){System.err.println("Gemini call failed: "+e.getMessage());return null;}finally{if(c!=null)c.disconnect();}}
+ private static void initializeLocalDB(){addLocal("malaria","Malaria is a life-threatening infectious disease caused by Plasmodium parasites, transmitted by Anopheles mosquitoes.",new String[]{"Fever","Chills","Headache","Sweating","Nausea"},new String[]{"Use insecticide-treated nets","Take antimalarial drugs when prescribed","Avoid mosquito bites"});addLocal("dengue","Dengue is a mosquito-borne viral infection causing high fever, severe headache, pain behind the eyes, joint pain and rash.",new String[]{"High fever","Severe headache","Joint and muscle pain","Rash"},new String[]{"Avoid mosquito bites","Remove standing water","Use repellents and nets"});addLocal("jock itch","Jock itch (tinea cruris) is a fungal infection of the groin area causing itchy, red, ring-shaped rashes.",new String[]{"Itchy groin rash","Redness","Scaling"},new String[]{"Keep the area dry","Use antifungal powders","Avoid tight clothing"});addLocal("diarrhea","Diarrhea involves frequent watery stools; the main risk is dehydration.",new String[]{"Loose stools","Abdominal cramps","Dehydration"},new String[]{"Oral rehydration solutions (ORS)","Safe drinking water","Hand hygiene"});addLocal("covid-19","COVID-19 is an infectious disease caused by SARS-CoV-2.",new String[]{"Fever","Cough","Loss of smell/taste","Shortness of breath"},new String[]{"Vaccination","Masking in crowded places","Hand hygiene"});addLocal("pink eye","Conjunctivitis is inflammation of the conjunctiva.",new String[]{"Redness","Discharge","Itching"},new String[]{"Avoid touching eyes","Hand hygiene","See doctor if vision changes"});addLocal("typhoid","Typhoid fever is an infection by Salmonella Typhi.",new String[]{"High fever","Stomach pain","Headache","Weakness"},new String[]{"Safe water and food","Hand hygiene","Vaccination in high-risk areas"});addLocal("stomach flu","Gastroenteritis causes vomiting, diarrhea and abdominal cramps.",new String[]{"Nausea","Vomiting","Diarrhea","Abdominal cramps"},new String[]{"Hydration","Safe food handling","Hand hygiene"});addLocal("asthma","Asthma is a chronic lung condition causing wheeze, breathlessness and chest tightness.",new String[]{"Wheezing","Shortness of breath","Chest tightness"},new String[]{"Use prescribed inhalers","Avoid triggers","Regular follow-ups"});}
+ private static void addLocal(String k,String d,String[] s,String[] p){JSONObject o=new JSONObject().put("name",k).put("description",d).put("symptoms",new JSONArray(Arrays.asList(s))).put("prevention",new JSONArray(Arrays.asList(p)));localDB.put(k.toLowerCase(Locale.ROOT),o);} private static JSONObject findLocal(String q){if(localDB.containsKey(q))return localDB.get(q);for(String k:localDB.keySet())if(q.contains(k)||k.contains(q))return localDB.get(k);for(String t:q.split("\\s+"))if(localDB.containsKey(t))return localDB.get(t);return null;} private static boolean isGreeting(String s){for(String g:new String[]{"hi","hello","hey","good morning","good afternoon","good evening"})if(s.contains(g))return true;return false;}
+ private static String readLimited(InputStream in,int max)throws IOException,RequestTooLargeException{if(in==null)return null;try(InputStream s=in;ByteArrayOutputStream o=new ByteArrayOutputStream(Math.min(max,8192))){byte[]b=new byte[4096];int total=0,n;while((n=s.read(b))!=-1){total+=n;if(total>max)throw new RequestTooLargeException();o.write(b,0,n);}return o.toString(StandardCharsets.UTF_8);}} private static class RequestTooLargeException extends Exception{}
+ private static boolean setCORS(HttpExchange ex){String origin=ex.getRequestHeaders().getFirst("Origin");if(origin==null||origin.isBlank())return true;if(ALLOWED_ORIGIN.equals(origin)||"http://localhost:8080".equals(origin)||"http://127.0.0.1:8080".equals(origin)){ex.getResponseHeaders().set("Access-Control-Allow-Origin",origin);ex.getResponseHeaders().set("Vary","Origin");ex.getResponseHeaders().set("Access-Control-Allow-Headers","Content-Type");ex.getResponseHeaders().set("Access-Control-Allow-Methods","POST, OPTIONS");return true;}return false;}
+ private static void sendJson(HttpExchange ex,int code,JSONObject o)throws IOException{byte[]b=o.toString().getBytes(StandardCharsets.UTF_8);ex.getResponseHeaders().set("Content-Type","application/json; charset=UTF-8");ex.sendResponseHeaders(code,b.length);try(OutputStream os=ex.getResponseBody()){os.write(b);}} private static void sendPlain(HttpExchange ex,int code,String s)throws IOException{byte[]b=s.getBytes(StandardCharsets.UTF_8);ex.getResponseHeaders().set("Content-Type","text/plain; charset=UTF-8");ex.sendResponseHeaders(code,b.length);try(OutputStream os=ex.getResponseBody()){os.write(b);}} private static String capitalizeWords(String s){StringBuilder b=new StringBuilder();for(String p:s.split("\\s+")){if(p.isEmpty())continue;if(b.length()>0)b.append(' ');b.append(Character.toUpperCase(p.charAt(0))).append(p.substring(1));}return b.toString();}
 }
