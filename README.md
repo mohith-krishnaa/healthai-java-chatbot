@@ -1,10 +1,10 @@
 # HealthAI Pro+
 
-HealthAI Pro+ is an educational full-stack health-information assistant with a lightweight Java HTTP backend and browser frontend. It combines a local knowledge fallback with Google Gemini API integration and an in-memory cache.
+An educational full-stack health-information assistant with a lightweight Java HTTP backend and browser frontend. The project combines a local knowledge fallback, Google Gemini integration, request controls and an in-memory cache.
 
-**Live Demo:** https://mohith-krishnaa.github.io/healthai-java-chatbot/
+**Live demo:** https://mohith-krishnaa.github.io/healthai-java-chatbot/
 
-> **Medical disclaimer:** This project is educational software, not a medical device or substitute for professional medical care. Do not use it to diagnose, treat, or make urgent medical decisions.
+> **Medical disclaimer:** This is educational software, not a medical device or substitute for professional medical care. Do not use it to diagnose, treat, or make urgent medical decisions.
 
 ## Architecture
 
@@ -26,47 +26,30 @@ Response
 
 ### Backend
 
-- Java HTTP server
-- `POST /ask` endpoint
+- Java HTTP server with `POST /ask`
 - Gemini API integration
-- Local health-information fallback
-- In-memory cache with a 6-hour TTL
-- Request size limit
+- Local knowledge fallback
+- 6-hour in-memory response cache
+- Request-size limit
 - HTTP timeouts and error handling
 - CORS handling
 - API key loaded from `GEMINI_API_KEY`
 
 ### Frontend
 
-- Browser-based chat interface
-- LocalStorage chat persistence
-- Voice input through Web Speech API
+- Browser chat interface
+- LocalStorage conversation persistence
+- Web Speech API voice input
 - Dark/light theme
-- Copy and export chat actions
-
-## Live usage
-
-Open the live demo above to evaluate the browser interface. AI-backed functionality depends on the configured deployment environment and Gemini API availability.
-
-## Project structure
-
-```text
-.
-├── HealthAIProPlus.java
-├── index.html
-├── .env.example
-├── .gitignore
-├── README.md
-└── LICENSE
-```
-
-## Requirements for local backend execution
-
-- Java 17 or newer
-- `org.json` dependency required by the Java source
-- A Gemini API key for AI-backed responses
+- Copy and export actions
 
 ## Local setup
+
+Requirements:
+
+- Java 17+
+- `org.json` dependency
+- Gemini API key for AI-backed responses
 
 Clone the repository:
 
@@ -75,9 +58,7 @@ git clone https://github.com/mohith-krishnaa/healthai-java-chatbot.git
 cd healthai-java-chatbot
 ```
 
-Download a compatible `org.json` JAR and keep the JAR outside source control.
-
-Set the API key as an environment variable. **Do not put a real key in source code.**
+Set the API key as an environment variable. Never hard-code a real key.
 
 Windows PowerShell:
 
@@ -91,13 +72,27 @@ Linux/macOS:
 export GEMINI_API_KEY="your_api_key_here"
 ```
 
-## Safety and limitations
+Keep the compatible `org.json` JAR outside source control and compile/run using your local Java setup.
 
-This project is **not clinically validated**. Model-generated health information can be incomplete or incorrect, and the local dataset is intentionally limited.
+## Project structure
 
-Do not use the application for emergency decisions or as a replacement for a qualified healthcare professional.
+```text
+.
+├── HealthAIProPlus.java
+├── index.html
+├── .env.example
+├── .gitignore
+├── README.md
+└── LICENSE
+```
 
-Important production considerations include authentication, privacy controls, source citations, model-response evaluation, restricted CORS, and careful handling of browser LocalStorage if sensitive information is entered.
+## Safety and privacy
+
+This project is **not clinically validated**. Model-generated health information may be incomplete or incorrect, and the local knowledge base is intentionally limited.
+
+Production use would require stronger authentication, privacy controls, source citations, model evaluation, restricted CORS, secure secret management and careful treatment of browser-stored conversation data.
+
+Do not use this project for emergencies or as a replacement for qualified medical care.
 
 ## License
 
