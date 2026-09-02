@@ -1,21 +1,17 @@
 # Security Policy
 
-## Supported Versions
+HealthAI Pro+ is an educational project and is not clinically validated. It accepts user prompts, can call an external model provider, and stores conversation state in the browser. Do not submit real patient records, credentials, or other sensitive personal information.
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+## Supported versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+Only the latest state of the `main` branch is considered for security fixes. This project does not currently promise a long-term supported release line.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Please open a private security report through GitHub’s **Report a vulnerability** flow if it is enabled for this repository. If that option is unavailable, open a minimal issue without including secrets, personal data, exploit payloads, or private conversations, and request a private follow-up channel from the maintainer.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Include the affected file or route, a short impact description, reproduction steps that use non-sensitive data, and any suggested mitigation. Please allow reasonable time for triage before public disclosure.
+
+## Scope reminders
+
+Do not treat the demo as a medical service. Report exposed credentials, unsafe CORS behavior, prompt or data leakage, authentication bypasses, and vulnerabilities that could affect users or the hosted demo. General model-quality complaints are useful project feedback but are not necessarily security vulnerabilities.
